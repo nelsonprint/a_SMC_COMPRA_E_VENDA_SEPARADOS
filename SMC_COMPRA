@@ -1,0 +1,134 @@
+// ==========================================
+// SMART MONEY CONCEPTS (SMC) TURBINADO + FILTROS (COMPRA)
+// ProfitChart - NTSL
+// ==========================================
+
+// ----- Inputs -----
+input
+  MinProporcaoCorpo(0.55);     
+  MaxProporcaoPavio(0.45);     
+  LookbackEstrutura(20);       
+  RiskRR(2.0);                 
+  StopOffset(5);               
+  PeriodoMME(9);               
+  MultCandleLongo(2.0);        
+  CandlesNormalizacao(3);      
+
+// ----- Variáveis -----
+var
+  Corpo, PavioSup, PavioInf: float;
+  ProporcaoCorpo, ProporcaoPavioSup, ProporcaoPavioInf: float;
+  CandleAlta: boolean;
+
+  HH, HL, LH, LL: boolean;
+  BOS_Alta: boolean;
+
+  MaxHigh, MinLow, Entry, Stop, Target: float;
+  i: integer;
+
+  MediaCorpos, MME9: float;
+  CandleLongo: boolean;
+  CountNormal: integer;
+  MercadoEsticado: boolean;
+
+  FiltroPullback, FiltroTrend, FiltroCandles, FiltroSequenciaBaixa: boolean;
+
+// ==========================================
+// INÍCIO
+// ==========================================
+begin
+
+  // ---- Corpo e pavios do candle ----
+  Corpo := abs(close - open);
+  PavioSup := high - max(open, close);
+  PavioInf := min(open, close) - low;
+
+  // ---- Proporções ----
+  if (high - low) > 0 then
+  begin
+    ProporcaoCorpo     := Corpo / (high - low);
+    ProporcaoPavioSup  := PavioSup / (high - low);
+    ProporcaoPavioInf  := PavioInf / (high - low);
+  end
+  else
+  begin
+    ProporcaoCorpo := 0;
+    ProporcaoPavioSup := 0;
+    ProporcaoPavioInf := 0;
+  end;
+
+  // ---- Tipo de candle válido (bullish) ----
+  CandleAlta := (close > open) and (ProporcaoCorpo >= MinProporcaoCorpo)
+                and (ProporcaoPavioSup <= MaxProporcaoPavio)
+                and (ProporcaoPavioInf <= MaxProporcaoPavio);
+
+  // ---- Estrutura de mercado: HH / HL / LH / LL ----
+  MaxHigh := high[1];
+  MinLow  := low[1];
+  for i := 2 to LookbackEstrutura do
+  begin
+    if high[i] > MaxHigh then MaxHigh := high[i];
+    if low[i]  < MinLow  then MinLow  := low[i];
+  end;
+
+  HH := high > MaxHigh;                       
+  LL := low  < MinLow;                        
+  HL := (low > MinLow)  and (close > close[1]);   
+  LH := (high < MaxHigh) and (close < close[1]);  
+
+  BOS_Alta := HH and CandleAlta;
+
+  // ==========================================
+  // FILTROS ADICIONAIS
+  // ==========================================
+  MME9 := MediaExp(PeriodoMME, close);  
+
+  MediaCorpos := MediaExp(LookbackEstrutura, abs(close - open));
+  CandleLongo := (Corpo > MultCandleLongo * MediaCorpos);
+
+  if CandleLongo then
+    MercadoEsticado := true;
+
+  if MercadoEsticado and (Corpo <= 1.2 * MediaCorpos) then
+    CountNormal := CountNormal + 1
+  else if not MercadoEsticado then
+    CountNormal := 0;
+
+  if CountNormal >= CandlesNormalizacao then
+  begin
+    MercadoEsticado := false;
+    CountNormal := 0;
+  end;
+
+  // ---- Filtro contra falsos pullbacks: não comprar se candle atual < candle anterior ou dois últimos
+  FiltroPullback := not ((close < close[1]) or (close < close[3]));
+
+  // ---- Filtro de tendência ascendente (MME9) ----
+  FiltroTrend := (MME9 > MME9[1]) and (MME9[1] > MME9[2]);
+
+  // ---- Filtro de candles consecutivos de alta ----
+  FiltroCandles := (CandleAlta and (close > close[1]));
+
+  // ---- Filtro de sequência de baixa nos candles anteriores ----
+  FiltroSequenciaBaixa := not ((close[1] < close[2]) and (close[2] < close[3]));
+
+  // ==========================================
+  // ENTRADA DE COMPRA
+  // ==========================================
+  if not MercadoEsticado and FiltroPullback and FiltroTrend and FiltroCandles and FiltroSequenciaBaixa and (BOS_Alta or (HL and CandleAlta)) then
+  begin
+    if (close > MME9) and (CandleAlta) then
+    begin
+      Entry := close;
+      Stop  := MinLow - StopOffset;
+      Target := Entry + (Entry - Stop) * RiskRR;
+
+      BuyAtMarket();
+      SellToCoverStop(Stop, 1);
+      SellToCoverLimit(Target, 1);
+
+      PlotText("BUY BOS", date, time, low, rgb(0,200,0));
+    end;
+  end;
+
+end;
